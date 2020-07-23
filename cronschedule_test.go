@@ -2,79 +2,54 @@ package cronschedule_test
 
 import (
 	"cronschedule"
-	"fmt"
 	"testing"
 	"time"
 )
 
-func TestCronSchedule(t *testing.T) {
+func TestNextExecution(t *testing.T) {
+	for _, param := range CronTestData {
+		schedule, err := cronschedule.Parse(param.Schedule)
+		if err != nil {
+			t.Errorf("%d|failed to build schedule for %s: %s", param.ID, param.Schedule, err)
+			continue
+		}
 
-	s := "10-12 1,2,5,6 3/2 * *"
-	schedule, err := cronschedule.Parse(s)
-	if err != nil {
-		t.Errorf("%s", err)
-	}
+		nextTimes := schedule.NextExecutions(param.T, 5)
 
-	fmt.Println(schedule.PrettyString())
-
-}
-
-func TestNextExecutionTimes(t *testing.T) {
-	scheduleStr := "1,2,3,4,5 1 23 1 1"
-	schedule, err := cronschedule.Parse(scheduleStr)
-	if err != nil {
-		t.Fatalf("%s", err)
-	}
-
-	execTimes := schedule.NextExecutions(time.Now(), 20)
-
-	for _, t := range execTimes {
-		fmt.Println(t)
+		for i := 1; i < 5; i++ {
+			expected, err := time.ParseInLocation("2006-01-02 15:04:05", param.ExpectedResults[i], time.Local)
+			if err != nil {
+				t.Errorf("%d|failed to parse time %s: %s", param.ID, param.ExpectedResults[i], err)
+				continue
+			}
+			if nextTimes[i] != expected {
+				t.Errorf("%d|times do not match, expected %v received %v", param.ID, param.ExpectedResults[i], nextTimes[i])
+				continue
+			}
+		}
 	}
 }
 
-func TestNextExecutionTimesV3(t *testing.T) {
-	scheduleStr := "1,2,3,4,5 1 23 1 1"
-	schedule, err := cronschedule.Parse(scheduleStr)
-	if err != nil {
-		t.Fatalf("%s", err)
-	}
+func BenchmarkNextExecution(*testing.B) {
+	for _, param := range CronTestData {
+		schedule, err := cronschedule.Parse(param.Schedule)
+		if err != nil {
+			return
+		}
 
-	execTimes := schedule.NextExecutionsV3(time.Now(), 20)
+		_ = schedule.NextExecution(param.T)
 
-	for _, t := range execTimes {
-		fmt.Println(t)
 	}
 }
 
-func TestV1vsV3(t *testing.T) {
-	scheduleStr := "0 1 23 1 1"
-	schedule, err := cronschedule.Parse(scheduleStr)
-	if err != nil {
-		t.Fatalf("%s", err)
+func BenchmarkNextExecutions(*testing.B) {
+	for _, param := range CronTestData {
+		schedule, err := cronschedule.Parse(param.Schedule)
+		if err != nil {
+			return
+		}
+
+		_ = schedule.NextExecutions(param.T, 200)
+
 	}
-
-	execTimes := schedule.NextExecutionsV3(time.Now(), 5)
-
-	for _, t := range execTimes {
-		fmt.Println(t)
-	}
-
-	execTimes = schedule.NextExecutions(time.Now(), 5)
-
-	for _, t := range execTimes {
-		fmt.Println(t)
-	}
-}
-
-func TestNextExecutionV3Times(t *testing.T) {
-	scheduleStr := "0 1 23 1 1"
-	schedule, err := cronschedule.Parse(scheduleStr)
-	if err != nil {
-		t.Fatalf("%s", err)
-	}
-
-	execTimes := schedule.NextExecutionV3(time.Now())
-	fmt.Println(execTimes)
-
 }

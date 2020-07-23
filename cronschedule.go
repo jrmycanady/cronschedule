@@ -39,19 +39,24 @@ const FieldDayOfTheWeekMax int = 6
 // Schedule is a cron schedule that has been parsed. It contains all the values for each field that are specified by the
 // cron schedule.
 type Schedule struct {
-	Minutes    map[int]int
-	MinutesStr []string
+	Minutes      map[int]int
+	MinutesSlice []int
+	MinutesStr   []string
 
-	Hours    map[int]int
-	HoursStr []string
+	Hours      map[int]int
+	HoursSlice []int
+	HoursStr   []string
 
-	DaysOfMonth    map[int]int
-	DaysOfMonthStr []string
+	DaysOfMonth      map[int]int
+	DaysOfMonthSlice []int
+	DaysOfMonthStr   []string
 
-	Months    map[int]int
-	MonthsStr []string
+	Months      map[int]int
+	MonthsSlice []int
+	MonthsStr   []string
 
 	DaysOfTheWeek    map[int]int
+	DaysOfWeekSlice  []int
 	DaysOfTheWeekStr []string
 
 	ScheduleStr string
@@ -80,15 +85,14 @@ func (s *Schedule) ShouldExecute(t time.Time) bool {
 		return false
 	}
 
-	if _, ok := s.DaysOfMonth[t.Day()]; !ok {
-		return false
-	}
-
 	if _, ok := s.Months[int(t.Month())]; !ok {
 		return false
 	}
 
-	if _, ok := s.DaysOfTheWeek[int(t.Weekday())]; !ok {
+	// Per POSIX spec the day of week and day of month are ORed...
+	_, dayOfMonthOK := s.DaysOfMonth[t.Day()]
+	_, dayOfWeekOK := s.DaysOfTheWeek[int(t.Weekday())]
+	if !dayOfWeekOK && !dayOfMonthOK {
 		return false
 	}
 
@@ -100,295 +104,175 @@ func (s *Schedule) ShouldExecuteNow() bool {
 	return s.ShouldExecute(time.Now())
 }
 
-func (s *Schedule) NextExecutionV3(t time.Time) time.Time {
-	year := t.Year()
-	minute := t.Minute() + 1
-	hour := t.Hour()
-	dayOfMonth := t.Day()
-	month := t.Month()
+// computeStartValues computes the starting values for generating the closest schedule time for t. If the schedule
+// directly aligns with t then the values related to t would be returned. In general t + 1second is generally provided
+// as the result of t would always be in the past as seconds would be assumed to be zero.
+func (s *Schedule) computeStartValues(t time.Time) (year int, monthIdx int, hourIdx int, minuteIdx int, day int) {
+	tYear := t.Year()
+	tMonth := t.Month()
+	tDay := t.Day()
+	tHour := t.Hour()
+	tMinute := t.Minute()
 
-	//fmt.Printf("starting time at %v\n", t)
+	monthIdx = 0
+	hourIdx = 0
 
-restart:
+	// Finding what the correct start month should be by looking at all valid months in the schedule.
+	for monthIdx < len(s.MonthsSlice) {
 
-	// Find next month that works by starting at the current month and rolling all the way around checking each value.
-	// Although we know all possible values for the month we don't yet know where in the list we need to start.
-	for _, ok := s.Months[int(month)]; !ok; _, ok = s.Months[int(month)] {
-		//fmt.Printf("month [%d] no good\n", month)
-		month++
-
-		if month == 13 {
-			//fmt.Printf("month exceeded, looping\n")
-			month = 1
-			year += 1
+		if s.MonthsSlice[monthIdx] > int(tMonth) {
+			// The month found is now larger than the start month so the new start value would be this month and
+			// the same year. All other field would start at zero.
+			return tYear, monthIdx, 0, 0, 1
 		}
-	}
 
-	//fmt.Printf("found month %d\n", month)
+		if s.MonthsSlice[monthIdx] == int(tMonth) {
+			// Found the exact month so we need to lookup everything else.
 
-	// Find the next day that will work in the selected month. Each loop is limited by the number of days and possible
-	// and we need to account for leap years.
-	// Incrementing day as needed.
-	possibleDays := 0
-	switch t.Month() {
-	case time.January, time.March, time.May, time.July, time.August, time.October, time.December:
-		possibleDays = 31
-	case time.April, time.June, time.September, time.November:
-		possibleDays = 30
-	case time.February:
-		leapTime := time.Date(year, time.December, 31, 0, 0, 0, 0, time.Local)
-		if leapTime.YearDay() > 365 {
-			possibleDays = 29
-		} else {
-			possibleDays = 28
-		}
-	}
-	//fmt.Printf("month is %d with possible days %d", month, possibleDays)
+			// Validate the day is a good stating point.
+			_, dayOfMonthOK := s.DaysOfMonth[tDay]
+			t := time.Date(tYear, tMonth, tDay, 0, 0, 0, 0, time.Local)
+			_, dayOfWeekOK := s.DaysOfTheWeek[int(t.Weekday())]
 
-	// Recording start day so we can bail if we reach this again. This happens if we are looking for 31 but we are in a
-	// 28 day month.
-	startDay := dayOfMonth
-	if startDay > possibleDays {
-		//fmt.Printf("start day %d is larger than possible days %d", startDay, possibleDays)
-		dayOfMonth = 1
-		//fmt.Printf("%d-%d-%d-%d-%d", year, month, dayOfMonth, hour, minute)
-		goto restart
-	}
+			if dayOfWeekOK || dayOfMonthOK {
 
-	for {
-		_, ok := s.DaysOfMonth[dayOfMonth]
-		if ok {
-			//fmt.Printf("found good day number %d\n", dayOfMonth)
-			currentTime := time.Date(year, month, dayOfMonth, hour, minute, 0, 0, time.Local)
-			// If the day found is ont he right week day then we are good.
-			if _, ok := s.DaysOfTheWeek[int(currentTime.Weekday())]; ok {
-				break
+				// The day of week is valid so process hours.
+				for hourIdx < len(s.HoursSlice) {
+
+					if s.HoursSlice[hourIdx] > tHour {
+						// The hour current index hour is past the provided out so send it along with a reset minute.
+						return tYear, monthIdx, hourIdx, 0, tDay
+					}
+
+					if s.HoursSlice[hourIdx] == tHour {
+						// The hour is correct so find the next minute.
+
+						for minuteIdx < len(s.MinutesSlice) {
+							if s.MinutesSlice[minuteIdx] >= tMinute {
+								return tYear, monthIdx, hourIdx, minuteIdx, tDay
+							}
+						}
+					}
+
+					hourIdx++
+				}
 			}
-
-			//fmt.Printf("day is bad day of week %d\n", currentTime.Weekday())
+			// The day of week was not valid so trying the next day.
+			nextDay := tDay + 1
+			if nextDay <= daysPerMonth(time.Month(s.MonthsSlice[monthIdx]), tYear) {
+				return tYear, monthIdx, 0, 0, nextDay
+			}
+			// The next day loops to a new month so doing nothing.
 		}
 
-		// No good so update.
-		dayOfMonth++
-
-		// If the current date is larger than possible days then go back to the start of the month
-		if dayOfMonth > possibleDays {
-			//fmt.Printf("we are past all days in the month at %d going back to 1\n", dayOfMonth)
-			dayOfMonth = 1
-		}
-
-		if dayOfMonth == startDay {
-			//fmt.Printf("rolled back to the origial start day so rolling to a new month\n")
-			dayOfMonth = 1
-			month++
-			//fmt.Printf("%d-%d-%d-%d-%d", year, month, dayOfMonth, hour, minute)
-
-			goto restart
-		}
+		monthIdx++
 	}
+	// The current month, nor a month after the current was found in the current year. Start the search at the beginning
+	// of the next year.
+	return tYear + 1, 0, 0, 0, 1
 
-	for _, ok := s.Hours[hour]; !ok; _, ok = s.Hours[hour] {
-		hour++
-		if hour > 23 {
-			hour = 0
-		}
-	}
-
-	for _, ok := s.Minutes[minute]; !ok; _, ok = s.Minutes[minute] {
-		minute++
-		if minute > 59 {
-			minute = 0
-		}
-	}
-
-	return time.Date(year, month, dayOfMonth, hour, minute, 0, 0, time.Local)
 }
 
-func (s *Schedule) NextExecutionsV3(t time.Time, count int) []time.Time {
+// NextExecutions returns a slice containing the times when the schedule should execute next.
+func (s *Schedule) NextExecutions(t time.Time, count int) []time.Time {
+	// execTimes will store all the resulting execution times found.
 	execTimes := make([]time.Time, 0, count)
 
-	next := s.NextExecutionV3(t)
+	t.Add(1 * time.Minute)
+	// Computing the starting values for the generation algorithm.
+	year, monthIdx, hourIdx, minuteIdx, day := s.computeStartValues(t.Add(1 * time.Minute))
 
-	year := next.Year()
-	month := next.Month()
-	hour := next.Hour()
-	minute := next.Minute()
-	dayOfMonth := next.Day()
-	dayOfWeek := next.Weekday()
+	// Generating the next run time until total count is reached. Generation is performed by simply processing the
+	// permutations of the known values. Days are an outlier due to the OR nature of day of the month and day of the week.
+	var numFound int = 0
 
-	// Get slices
-	months := sortMapKeys(s.Months)
-	hours := sortMapKeys(s.Hours)
-	minutes := sortMapKeys(s.Minutes)
-	daysOfMonth := sortMapKeys(s.DaysOfMonth)
-	daysOfWeek := sortMapKeys(s.DaysOfTheWeek)
+permutation:
+	for numFound <= count {
 
-	var monthsIndex int = -1
-	var monthsLen = len(months)
+		// Processing each supported month.
+		for monthIdx < len(s.MonthsSlice) {
+			month := s.MonthsSlice[monthIdx]
 
-	var hoursIndex int = -1
-	var hoursLen = len(hours)
+			// Processing the days.
+			daysInMonth := daysPerMonth(time.Month(month), year)
+			for day <= daysInMonth {
 
-	var minutesIndex int = -1
-	var minutesLen = len(minutes)
+				_, dayOfMonthOK := s.DaysOfMonth[day]
+				t := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.Local)
+				_, dayOfWeekOK := s.DaysOfTheWeek[int(t.Weekday())]
+				if dayOfMonthOK || dayOfWeekOK {
+					// Processing the hours.
+					for hourIdx < len(s.HoursSlice) {
+						hour := s.HoursSlice[hourIdx]
 
-	var daysOfMonthIndex int = -1
-	var daysOfMonthLen = len(daysOfMonth)
-
-	var daysOfWeekIndex int = -1
-	//var daysOfWeekLen = len(s.DaysOfTheWeek)
-
-	for i, v := range months {
-		if int(month) == v {
-			monthsIndex = i
-			break
-		}
-	}
-	if monthsIndex == -1 {
-		panic("months index not found")
-	}
-
-	for i, v := range hours {
-		if hour == v {
-			hoursIndex = i
-			break
-		}
-	}
-	if hoursIndex == -1 {
-		panic("hoursIndex not found")
-	}
-
-	for i, v := range minutes {
-		if minute == v {
-			minutesIndex = i
-			break
-		}
-	}
-	if minutesIndex == -1 {
-		panic("minutesIndex not found")
-	}
-
-	for i, v := range daysOfMonth {
-		if dayOfMonth == v {
-			daysOfMonthIndex = i
-			break
-		}
-	}
-	if daysOfMonthIndex == -1 {
-		panic("daysOfMonth not found")
-	}
-
-	for i, v := range daysOfWeek {
-		if int(dayOfWeek) == v {
-			daysOfWeekIndex = i
-			break
-		}
-	}
-	if daysOfWeekIndex == -1 {
-		panic("daysOfWeekIndex not found")
-	}
-
-	foundCount := 0
-
-	for foundCount != count {
-
-		for monthsIndex < monthsLen {
-			month := months[monthsIndex]
-
-			for daysOfMonthIndex < daysOfMonthLen {
-				day := daysOfMonth[daysOfMonthIndex]
-
-				possibleDays := 0
-				switch time.Month(month) {
-				case time.January, time.March, time.May, time.July, time.August, time.October, time.December:
-					possibleDays = 31
-				case time.April, time.June, time.September, time.November:
-					possibleDays = 30
-				case time.February:
-					leapTime := time.Date(year, time.December, 31, 0, 0, 0, 0, time.Local)
-					if leapTime.YearDay() > 365 {
-						possibleDays = 29
-					} else {
-						possibleDays = 28
-					}
-				}
-
-				// If past possible days of the month bail.
-				if day > possibleDays {
-					break
-				}
-
-				// Now that we have the day go ahead and validate the day of the week.
-				weekdayT := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.Local)
-				if _, ok := s.DaysOfTheWeek[int(weekdayT.Weekday())]; ok {
-
-					for hoursIndex < hoursLen {
-						hour := hours[hoursIndex]
-						fmt.Printf("%v", s.Hours)
-						fmt.Printf("hour: %v", hour)
-						for minutesIndex < minutesLen {
-							minute := minutes[minutesIndex]
+						for minuteIdx < len(s.MinutesSlice) {
+							minute := s.MinutesSlice[minuteIdx]
 
 							execT := time.Date(year, time.Month(month), day, hour, minute, 0, 0, time.Local)
 							execTimes = append(execTimes, execT)
-							foundCount++
+							numFound++
 
-							minutesIndex++
+							// Checking if we have the correct number and breaking early if so.  Waiting would result in
+							// more than count returned.
+							if numFound == count {
+								break permutation
+							}
 
+							minuteIdx++
 						}
 
-						minutesIndex = 0
-						hoursIndex++
+						minuteIdx = 0
+						hourIdx++
 					}
-
-					hoursIndex = 0
 				}
 
-				daysOfMonthIndex++
+				hourIdx = 0
+				minuteIdx = 0
+				day++
 			}
 
-			daysOfMonthIndex = 0
-			monthsIndex++
+			// Starting at the first hour:minute:day of the next month.
+			day = 1
+			hourIdx = 0
+			minuteIdx = 0
+			monthIdx++
 		}
 
-		// Exhausted months left, resetting to next year.
-		monthsIndex = 0
+		// Starting at the next month:hour:minute:day of the next year.
+		monthIdx = 0
+		day = 1
+		hourIdx = 0
+		minuteIdx = 0
 		year++
-
 	}
-
 	return execTimes
+
 }
 
-// NextExecutionV2
-// Test month?
-// Test day
-// Test day of week
-// Test Hour
-// Test Minute
-
-// NextExecution returns the time when the next execution should happen after the time provides.
+// NextExecution returns the next time the schedule should be executed. It is a convenience method to return the next
+// immediate execution time. It leverages NextExecutions() which should be used if multiple values are needed.
 func (s *Schedule) NextExecution(t time.Time) time.Time {
-	t = t.Add(1 * time.Minute)
-
-	found := s.ShouldExecute(t)
-	for !found {
-		t = t.Add(1 * time.Minute)
-		found = s.ShouldExecute(t)
-	}
-
-	return t
+	execTimes := s.NextExecutions(t, 1)
+	return execTimes[0]
 }
 
-// NextExecutions returns a list (count) next execution times for the schedule.
-func (s *Schedule) NextExecutions(t time.Time, count int) []time.Time {
-	executionTimes := make([]time.Time, 0, 0)
-	for i := 0; i < count; i++ {
-		nextT := s.NextExecution(t)
-		executionTimes = append(executionTimes, s.NextExecution(t))
-		t = nextT
+// daysPerMonth returns the number of days in the month for the year specified.
+func daysPerMonth(month time.Month, year int) int {
+	switch month {
+	case time.January, time.March, time.May, time.July, time.August, time.October, time.December:
+		return 31
+	case time.April, time.June, time.September, time.November:
+		return 30
+	case time.February:
+		leapTime := time.Date(year, time.December, 31, 0, 0, 0, 0, time.Local)
+		if leapTime.YearDay() > 365 {
+			return 29
+		} else {
+			return 28
+		}
+	default:
+		panic("unknown month")
 	}
-	return executionTimes
 }
 
 // sortMapKeys sorts the keys of an int keyed map and returns a slice of the sorted keys.
@@ -513,14 +397,19 @@ func EmptySchedule() Schedule {
 	return Schedule{
 		Minutes:          make(map[int]int),
 		MinutesStr:       make([]string, 0, 0),
+		MinutesSlice:     make([]int, 0, 0),
 		Hours:            make(map[int]int),
 		HoursStr:         make([]string, 0, 0),
+		HoursSlice:       make([]int, 0, 0),
 		DaysOfMonth:      make(map[int]int),
 		DaysOfMonthStr:   make([]string, 0, 0),
+		DaysOfMonthSlice: make([]int, 0, 0),
 		Months:           make(map[int]int),
 		MonthsStr:        make([]string, 0, 0),
+		MonthsSlice:      make([]int, 0, 0),
 		DaysOfTheWeek:    make(map[int]int),
 		DaysOfTheWeekStr: make([]string, 0, 0),
+		DaysOfWeekSlice:  make([]int, 0, 0),
 		ScheduleStr:      "",
 	}
 }
@@ -559,6 +448,7 @@ func Parse(s string) (Schedule, error) {
 		// on fields.
 		for _, value := range strings.Split(field, ",") {
 			schedule.AddFieldStrByIndex(value, i)
+
 			fieldValues, err := ParseFieldValue(value, min, max)
 			if err != nil {
 				return schedule, fmt.Errorf("failed to parse %s field with value of %s: %s", FieldNameByIndex(i), value, err)
@@ -568,7 +458,37 @@ func Parse(s string) (Schedule, error) {
 		}
 	}
 
+	// Cleaning up day of week vs day of month wild card logic. By default the parser adds values for each as specified
+	// the job description. Depending on the values of each the usable values in each list are changed.
+	// |Day Of Month|Day Of Week|Result                                   |
+	// |------------------------------------------------------------------|
+	// |     *      |     *     |Both will be fully populated.            |
+	// |     *      |     #     |Only Day Of Week will get populated.     |
+	// |     #      |     *     |Only Day Of Month will get populated.    |
+	//
+	// NOTE: mutlivalue fields and interval fields containing * are undefined.
+	if fields[2] == "*" && fields[4] == "*" {
+		// TODO empty the day of week map. Update the processor to ignore building the time and checking day of week if
+		// empty.
+	}
+	if fields[2] == "*" && fields[4] != "*" {
+		schedule.DaysOfMonth = make(map[int]int)
+	}
+	if fields[2] != "*" && fields[4] == "*" {
+		schedule.DaysOfTheWeek = make(map[int]int)
+	}
+
+	schedule.buildSlices()
 	return schedule, nil
+}
+
+// buildSlices creates a sorted slice of the values for each field.
+func (s *Schedule) buildSlices() {
+	s.MinutesSlice = sortMapKeys(s.Minutes)
+	s.HoursSlice = sortMapKeys(s.Hours)
+	s.DaysOfMonthSlice = sortMapKeys(s.DaysOfMonth)
+	s.MonthsSlice = sortMapKeys(s.Months)
+	s.DaysOfWeekSlice = sortMapKeys(s.DaysOfTheWeek)
 }
 
 // ParseFieldValue parses a single value of a field and returns a slice of the values that are compassed by the field
