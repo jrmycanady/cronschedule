@@ -1,5 +1,7 @@
-// Package cronschedule provides the functionality to parse and request execution times for a schedule provided in the
-// cron format.
+// Package cronschedule provides the ability to parse an execution schedule specified in cron format and then generate
+// the next execution times based on any start time. It's specifically intended to be used as a component of job
+// scheduling and execution implementations.
+
 package cronschedule
 
 import (
@@ -36,8 +38,7 @@ const FieldMonthMax int = 12
 const FieldDayOfTheWeekMin int = 0
 const FieldDayOfTheWeekMax int = 6
 
-// Schedule is a cron schedule that has been parsed. It contains all the values for each field that are specified by the
-// cron schedule.
+// Schedule is a cron schedule. Parse should be utilized to generate Schedules.
 type Schedule struct {
 	Minutes      map[int]int
 	MinutesSlice []int
@@ -71,11 +72,10 @@ func (s *Schedule) PrettyString() string {
 	prettyString += fmt.Sprintf("Days Of The Month: %s => [%#v]\n", s.DaysOfMonthStr, sortMapKeys(s.DaysOfMonth))
 	prettyString += fmt.Sprintf("Month:             %s => [%#v]\n", s.MonthsStr, sortMapKeys(s.Months))
 	prettyString += fmt.Sprintf("Day Of The Week:   %s => [%#v]\n", s.DaysOfTheWeekStr, sortMapKeys(s.DaysOfTheWeek))
-
 	return prettyString
 }
 
-// ShouldExecute returns true if the schedule specifies it should execute at time t.
+// ShouldExecute returns true if the schedule should be executed at time _t_.
 func (s *Schedule) ShouldExecute(t time.Time) bool {
 	if _, ok := s.Minutes[t.Minute()]; !ok {
 		return false
@@ -99,7 +99,7 @@ func (s *Schedule) ShouldExecute(t time.Time) bool {
 	return true
 }
 
-// ShouldExecuteNow is the same as ShouldExecute but it uses the current time.
+// ShouldExecuteNow is the same as ShouldExecute but uses the current time.
 func (s *Schedule) ShouldExecuteNow() bool {
 	return s.ShouldExecute(time.Now())
 }
@@ -173,7 +173,7 @@ func (s *Schedule) computeStartValues(t time.Time) (year int, monthIdx int, hour
 
 }
 
-// NextExecutions returns a slice containing the times when the schedule should execute next.
+// NextExecutions returns a slice containing of _count_ times when the schedule should execute next.
 func (s *Schedule) NextExecutions(t time.Time, count int) []time.Time {
 	// execTimes will store all the resulting execution times found.
 	execTimes := make([]time.Time, 0, count)
@@ -184,7 +184,7 @@ func (s *Schedule) NextExecutions(t time.Time, count int) []time.Time {
 
 	// Generating the next run time until total count is reached. Generation is performed by simply processing the
 	// permutations of the known values. Days are an outlier due to the OR nature of day of the month and day of the week.
-	var numFound int = 0
+	var numFound = 0
 
 permutation:
 	for numFound <= count {
@@ -198,8 +198,14 @@ permutation:
 			for day <= daysInMonth {
 
 				_, dayOfMonthOK := s.DaysOfMonth[day]
-				t := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.Local)
-				_, dayOfWeekOK := s.DaysOfTheWeek[int(t.Weekday())]
+
+				dayOfWeekOK := false
+				if len(s.DaysOfTheWeek) != 0 {
+					// Only checking DaysOfTheWeek if one has been specified. Otherwise we assume any day is okay.
+					t := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.Local)
+					_, dayOfWeekOK = s.DaysOfTheWeek[int(t.Weekday())]
+				}
+
 				if dayOfMonthOK || dayOfWeekOK {
 					// Processing the hours.
 					for hourIdx < len(s.HoursSlice) {
@@ -249,8 +255,9 @@ permutation:
 
 }
 
-// NextExecution returns the next time the schedule should be executed. It is a convenience method to return the next
-// immediate execution time. It leverages NextExecutions() which should be used if multiple values are needed.
+// NextExecution returns the next time the schedule should be executed starting from time _t_. It is a convenience
+// method to return the next immediate execution time. It leverages NextExecutions() which should be used if multiple
+// values are needed. Looping on NexExecution is redundant.
 func (s *Schedule) NextExecution(t time.Time) time.Time {
 	execTimes := s.NextExecutions(t, 1)
 	return execTimes[0]
@@ -285,7 +292,7 @@ func sortMapKeys(m map[int]int) []int {
 	return list
 }
 
-// AddMinutes add the minutes listed to the schedule. Invalid values will be ignored.
+// AddMinutes adds the minutes listed to the schedule. Invalid values will be ignored.
 func (s *Schedule) AddMinutes(minutes []int) {
 	for _, i := range minutes {
 		if i < FieldMinuteMin || i > FieldMinuteMax {
@@ -300,7 +307,7 @@ func (s *Schedule) AddMinutes(minutes []int) {
 	}
 }
 
-// AddHours add the hours listed to the schedule. Invalid values will be ignored.
+// AddHours adds the hours listed to the schedule. Invalid values will be ignored.
 func (s *Schedule) AddHours(hours []int) {
 	for _, i := range hours {
 		if i < FieldHourMin || i > FieldHourMax {
@@ -315,7 +322,7 @@ func (s *Schedule) AddHours(hours []int) {
 	}
 }
 
-// AddDaysOfMonth add the days of the month listed to the schedule. Invalid values will be ignored.
+// AddDaysOfMonth adds the days of the month listed to the schedule. Invalid values will be ignored.
 func (s *Schedule) AddDaysOfMonth(daysOfMonth []int) {
 	for _, i := range daysOfMonth {
 		if i < FieldDayOfMonthMin || i > FieldDayOfMonthMax {
@@ -330,7 +337,7 @@ func (s *Schedule) AddDaysOfMonth(daysOfMonth []int) {
 	}
 }
 
-// AddMonths add the months listed to the schedule. Invalid values will be ignored.
+// AddMonths adds the months listed to the schedule. Invalid values will be ignored.
 func (s *Schedule) AddMonths(months []int) {
 	for _, i := range months {
 		if i < FieldMonthMin || i > FieldMonthMax {
@@ -345,7 +352,7 @@ func (s *Schedule) AddMonths(months []int) {
 	}
 }
 
-// AddDaysOfTheWeek add the days of the week listed to the schedule. Invalid values will be ignored.
+// AddDaysOfTheWeek adds the days of the week listed to the schedule. Invalid values will be ignored.
 func (s *Schedule) AddDaysOfTheWeek(daysOfTheWeek []int) {
 	for _, i := range daysOfTheWeek {
 		if i < FieldDayOfTheWeekMin || i > FieldDayOfTheWeekMax {
@@ -360,7 +367,10 @@ func (s *Schedule) AddDaysOfTheWeek(daysOfTheWeek []int) {
 	}
 }
 
-// AddByIndex adds the values to the proper field based on the index.
+// AddByIndex adds the values to the proper field based on the index. The index is determined by the cron schedule
+// format
+//    0     1        2        3       4
+// minute hour day_of_month month day_of_week
 func (s *Schedule) AddByIndex(values []int, index int) {
 	switch index {
 	case 0:
@@ -372,12 +382,12 @@ func (s *Schedule) AddByIndex(values []int, index int) {
 	case 3:
 		s.AddMonths(values)
 	case 4:
-		s.AddDaysOfTheWeek((values))
+		s.AddDaysOfTheWeek(values)
 	}
 }
 
 // AddFieldStrByIndex adds the field Str value for the field at index.
-func (s *Schedule) AddFieldStrByIndex(fieldStr string, index int) {
+func (s *Schedule) addFieldStrByIndex(fieldStr string, index int) {
 	switch index {
 	case 0:
 		s.MinutesStr = append(s.MinutesStr, fieldStr)
@@ -393,7 +403,7 @@ func (s *Schedule) AddFieldStrByIndex(fieldStr string, index int) {
 }
 
 // emptySchedule generates an empty schedule.
-func EmptySchedule() Schedule {
+func emptySchedule() Schedule {
 	return Schedule{
 		Minutes:          make(map[int]int),
 		MinutesStr:       make([]string, 0, 0),
@@ -414,12 +424,32 @@ func EmptySchedule() Schedule {
 	}
 }
 
-// Parse will parse the cron schedule s and provide a Schedule ready to be used. If parsing fails an error will be
-// provided.
-// Parse only supports a full schedule so all 5 fields must be present.
+// Parse will parse the cron schedule _s_ and provide a Schedule struct representing the schedule. Upon parsing failure
+// an error will be provided.
+//
+// Support Notes
+//
+// - Only supports scheduling including all 5 fields separated by a single space.
+// - Per UNIX spec, utilizes an OR when both day_of_week and day_of_month are specified as anything but *.
+// - Text version of days, e.g. SUN-SAT, are _not_ currently supported.
+// - Text versions of months, e.g. JAN-DEC, are _not_ currently supported.
+// - Predefined schedules, e.g @yearly are _not_ supported.
+// - Years are not supported.
+// - Unsupported non-standard characters include [L, W, #, ?]
+// - _Does_ support / for intervals. Specifically the job will increment by the value of b in a/b starting with a.
+//
+// Day Of Month / Day Of Week Logic Table
+//
+// |Day Of Month| Day Of Week |Output                                                                                  |
+// |------------|-------------|----------------------------------------------------------------------------------------|
+// |     *      |      *      |All days are included.                                                                  |
+// |     *      | Non * Value |Only days that match Day Of Week are included.                                          |
+// |Non * Value |      *      |Only days that match Day Of Month are included.                                         |
+// |Non * Value | Non * Value |All value that match Day Of Month or Day Of Year. Note: If * is included in either it   |
+// |            |             |can include all days and make the other irrelevant.                                     |
 func Parse(s string) (Schedule, error) {
 	// Building the empty schedule that will be filled as parsing is completed.
-	schedule := EmptySchedule()
+	schedule := emptySchedule()
 	schedule.ScheduleStr = strings.TrimSpace(s)
 
 	// Split the string by spaces to obtain each field. Expecting exactly 5 fields.
@@ -434,24 +464,24 @@ func Parse(s string) (Schedule, error) {
 
 		// Checking for any empty values to prevent double spaces from being including in the entry.
 		if field == "" {
-			return schedule, fmt.Errorf("received empty value for field %s", FieldNameByIndex(i))
+			return schedule, fmt.Errorf("received empty value for field %s", fieldNameByIndex(i))
 		}
 
 		// Retrieving the min and max values for the current field which will be used to process the values
 		// of the field.
-		min, max, err := FieldMinMaxByIndex(i)
+		min, max, err := fieldMinMaxByIndex(i)
 		if err != nil {
-			return schedule, fmt.Errorf("failed to get min and max value for field %s: %s", FieldNameByIndex(i), err)
+			return schedule, fmt.Errorf("failed to get min and max value for field %s: %s", fieldNameByIndex(i), err)
 		}
 
 		// Processing every value found in the field. This is specifically needed due to the multi value option
 		// on fields.
 		for _, value := range strings.Split(field, ",") {
-			schedule.AddFieldStrByIndex(value, i)
+			schedule.addFieldStrByIndex(value, i)
 
-			fieldValues, err := ParseFieldValue(value, min, max)
+			fieldValues, err := parseFieldValue(value, min, max)
 			if err != nil {
-				return schedule, fmt.Errorf("failed to parse %s field with value of %s: %s", FieldNameByIndex(i), value, err)
+				return schedule, fmt.Errorf("failed to parse %s field with value of %s: %s", fieldNameByIndex(i), value, err)
 			}
 
 			schedule.AddByIndex(fieldValues, i)
@@ -466,10 +496,9 @@ func Parse(s string) (Schedule, error) {
 	// |     *      |     #     |Only Day Of Week will get populated.     |
 	// |     #      |     *     |Only Day Of Month will get populated.    |
 	//
-	// NOTE: mutlivalue fields and interval fields containing * are undefined.
+	// NOTE: multi-value fields and interval fields containing * are undefined.
 	if fields[2] == "*" && fields[4] == "*" {
-		// TODO empty the day of week map. Update the processor to ignore building the time and checking day of week if
-		// empty.
+		schedule.DaysOfTheWeek = make(map[int]int)
 	}
 	if fields[2] == "*" && fields[4] != "*" {
 		schedule.DaysOfMonth = make(map[int]int)
@@ -491,11 +520,11 @@ func (s *Schedule) buildSlices() {
 	s.DaysOfWeekSlice = sortMapKeys(s.DaysOfTheWeek)
 }
 
-// ParseFieldValue parses a single value of a field and returns a slice of the values that are compassed by the field
+// parseFieldValue parses a single value of a field and returns a slice of the values that are compassed by the field
 // definition. If the field fails to parse an error is provided and the slice will be nil.
 // The min and max values should be the min and max for the field being provided. The parser utilizes these values for
 // validation and range generation.
-func ParseFieldValue(value string, min int, max int) ([]int, error) {
+func parseFieldValue(value string, min int, max int) ([]int, error) {
 	// Performing the regex match on the field. The match group determines the type of field provided and thus how to
 	// parse it.
 	match := re.FindAllStringSubmatch(value, -1)
@@ -514,7 +543,7 @@ func ParseFieldValue(value string, min int, max int) ([]int, error) {
 	switch {
 	case matchGroups[1] != "":
 		// [*]
-		values, err := GenerateValueSlice(min, max, 1, min, max)
+		values, err := generateValueSlice(min, max, 1, min, max)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build values for [%s]: %s", matchGroups[1], err)
 		}
@@ -533,7 +562,7 @@ func ParseFieldValue(value string, min int, max int) ([]int, error) {
 			panic(fmt.Sprintf("regex matched [*/#] but failed to convert the # value of [%s] to integer: %s", params[1], err))
 		}
 
-		values, err := GenerateValueSlice(min, max, interval, min, max)
+		values, err := generateValueSlice(min, max, interval, min, max)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build values for [%s]: %s", matchGroups[2], err)
 		}
@@ -557,7 +586,7 @@ func ParseFieldValue(value string, min int, max int) ([]int, error) {
 			panic(fmt.Sprintf("regex matched [#-#] but failed to convert the second # value of [%s] to integer: %s", params[1], err))
 		}
 
-		values, err := GenerateValueSlice(startRange, endRange, 1, min, max)
+		values, err := generateValueSlice(startRange, endRange, 1, min, max)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build values for [%s]: %s", matchGroups[3], err)
 		}
@@ -591,7 +620,7 @@ func ParseFieldValue(value string, min int, max int) ([]int, error) {
 			panic(fmt.Sprintf("regex matched [#-#/#] but failed to convert the second range # value of [%s] to integer: %s", params[1], err))
 		}
 
-		values, err := GenerateValueSlice(startRange, endRange, interval, min, max)
+		values, err := generateValueSlice(startRange, endRange, interval, min, max)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build values for [%s]: %s", matchGroups[3], err)
 		}
@@ -615,7 +644,7 @@ func ParseFieldValue(value string, min int, max int) ([]int, error) {
 			panic(fmt.Sprintf("regex matched [#/#] but failed to convert the interval # value of [%s] to integer: %s", params[1], err))
 		}
 
-		values, err := GenerateValueSlice(startRange, max, interval, min, max)
+		values, err := generateValueSlice(startRange, max, interval, min, max)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build values for [%s]: %s", matchGroups[3], err)
 		}
@@ -629,7 +658,7 @@ func ParseFieldValue(value string, min int, max int) ([]int, error) {
 			panic(fmt.Sprintf("regex matched [#] but failed to convert the # value of [%s] to integer: %s", matchGroups[6], err))
 		}
 
-		values, err := GenerateValueSlice(singleValue, singleValue, 1, min, max)
+		values, err := generateValueSlice(singleValue, singleValue, 1, min, max)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build values for [%s]: %s", matchGroups[3], err)
 		}
@@ -642,8 +671,8 @@ func ParseFieldValue(value string, min int, max int) ([]int, error) {
 
 }
 
-// FieldNameByIndex returns the name of the filed based on the index i provided.
-func FieldNameByIndex(i int) string {
+// fieldNameByIndex returns the name of the filed based on the index i provided.
+func fieldNameByIndex(i int) string {
 	switch i {
 	case 0:
 		return "minute"
@@ -660,8 +689,8 @@ func FieldNameByIndex(i int) string {
 	}
 }
 
-// FieldMinMaxByIndex returns the minimum and maximum value for the field specified by the index.
-func FieldMinMaxByIndex(i int) (min int, max int, err error) {
+// fieldMinMaxByIndex returns the minimum and maximum value for the field specified by the index.
+func fieldMinMaxByIndex(i int) (min int, max int, err error) {
 	switch i {
 	case 0:
 		return FieldMinuteMin, FieldMinuteMax, nil
@@ -678,8 +707,8 @@ func FieldMinMaxByIndex(i int) (min int, max int, err error) {
 	}
 }
 
-// GenerateValueSlice generates a slice of all values specified by the range, interval, and min/max.
-func GenerateValueSlice(rangeStart int, rangeEnd int, interval int, fieldMin int, fieldMax int) ([]int, error) {
+// generateValueSlice generates a slice of all values specified by the range, interval, and min/max.
+func generateValueSlice(rangeStart int, rangeEnd int, interval int, fieldMin int, fieldMax int) ([]int, error) {
 
 	// Rejecting any intervals that would result in the value not incrementing upwards.
 	if interval <= 0 {
