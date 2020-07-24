@@ -1,7 +1,7 @@
 package cronschedule_test
 
 import (
-	"cronschedule"
+	"github.com/jrmycanady/cronschedule"
 	"testing"
 	"time"
 )
